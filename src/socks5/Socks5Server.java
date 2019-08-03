@@ -9,8 +9,9 @@ public class Socks5Server {
     private static final int DEFAULT_PORT=1080;
     private static final int MAX_CONNECTION=100;
     public static final byte PROTOCOL_SOCKS5=0x05;
-    public static final byte SUPPORT_METHODS=0x00;
+    public static final byte SUPPORT_METHODS[]={0x00,0x02};
     private static boolean FLAG=true;
+    public static final String[][] SUPPORT_USER={{"test","test"}};
     public static void startServer() throws InterruptedException, IOException {
         FLAG=true;
         ServerSocket serverSocket=new ServerSocket(DEFAULT_PORT);
@@ -18,7 +19,7 @@ public class Socks5Server {
         while (FLAG){
             semaphore.acquire();
             Socket client=serverSocket.accept();
-            System.out.println("\n\n受到Socket连接！");
+            System.out.println("\n\n收到Socket连接！");
             new ClientSocketThread(client,semaphore).start();
         }
     }

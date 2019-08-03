@@ -13,10 +13,11 @@ public class ClientSocketThread extends Thread {
     private Socket clientSocket;
     private Semaphore semaphore;
     private Socket targetSocket;
-    private Byte protocal=0;
+    private Byte protocal = 0;
+    private byte switchMethod=0x00;
     public ClientSocketThread(Socket clientSocket, Semaphore semaphore) {
-        this.clientSocket=clientSocket;
-        this.semaphore=semaphore;
+        this.clientSocket = clientSocket;
+        this.semaphore = semaphore;
     }
 
     @Override
@@ -31,6 +32,13 @@ public class ClientSocketThread extends Thread {
                 closeClient(clientIn, clientOut);
                 return;
             }
+            //认证
+            if (!Authentication.auth(switchMethod,clientIn,clientOut)){
+                //认证失败，关闭连接
+                closeClient(clientIn,clientOut);
+                return;
+            }
+
             //处理客户端请求
             if (!request(clientIn, clientOut)) {
                 //处理失败
@@ -46,14 +54,14 @@ public class ClientSocketThread extends Thread {
             thread2.join();
             clientSocket.close();
             targetSocket.close();
-        }catch (Exception e){
+        } catch (Exception e) {
             e.printStackTrace();
-        }finally {
+        } finally {
             semaphore.release();
         }
     }
 
-    public void closeClient(InputStream clientIn,OutputStream clientOut) throws IOException {
+    public void closeClient(InputStream clientIn, OutputStream clientOut) throws IOException {
         clientIn.close();
         clientOut.flush();
         clientOut.close();
@@ -63,40 +71,48 @@ public class ClientSocketThread extends Thread {
 
     /**
      * 握手阶段处理
+     *
      * @param inputStream
      * @param outputStream
      * @return
      */
-    public boolean negotiation(InputStream inputStream,OutputStream outputStream){
-        boolean result=false;
-        byte[] tmp=new byte[2];
+    public boolean negotiation(InputStream inputStream, OutputStream outputStream) {
+        boolean result = false;
+        byte[] tmp = new byte[2];
         try {
-            if (inputStream.read(tmp)!=-1){
-                switch (tmp[0]){
+            if (inputStream.read(tmp) != -1) {
+                switch (tmp[0]) {
                     //协议版本
                     case Socks5Server.PROTOCOL_SOCKS5:
                         System.out.println("协议版本5");
-                        protocal=Socks5Server.PROTOCOL_SOCKS5;
-                        byte nmethods=tmp[1];
-                        System.out.println("协议认证数量"+nmethods);
-                        byte[] methods=new byte[nmethods];
+                        protocal = Socks5Server.PROTOCOL_SOCKS5;
+                        byte nmethods = tmp[1];
+                        System.out.println("协议认证数量:" + nmethods);
+                        byte[] methods = new byte[nmethods];
                         inputStream.read(methods);
-                        boolean has_methods=false;
-                        for (int i=0;i<nmethods;i++){
-                            if (methods[i]==Socks5Server.SUPPORT_METHODS){
-                                has_methods=true;
-                                break;
+                        boolean has_methods = false;
+                        for (int i = 0; i < nmethods; i++) {
+                            System.out.println("支持的认证协议:"+methods[i]);
+                        }
+                        for (int j = 0; j < Socks5Server.SUPPORT_METHODS.length; j++) {
+                            for (int i = 0; i < nmethods; i++) {
+                                if (methods[i] == Socks5Server.SUPPORT_METHODS[j]) {
+                                    has_methods = true;
+                                    switchMethod = Socks5Server.SUPPORT_METHODS[j];
+                                    break;
+                                }
                             }
                         }
                         outputStream.write(protocal);
-                        if (has_methods){
-                            outputStream.write(Socks5Server.SUPPORT_METHODS);
-                            result=true;
-                        }else {
+                        if (has_methods) {
+                            System.out.println("选择的协议版本："+switchMethod);
+                            outputStream.write(switchMethod);
+                            result = true;
+                        } else {
                             outputStream.write(0xFF);
                         }
                         break;
-                        default:
+                    default:
                 }
                 outputStream.flush();
             }
@@ -107,24 +123,33 @@ public class ClientSocketThread extends Thread {
         return result;
     }
 
-    private boolean request(InputStream inputStream,OutputStream outputStream) throws IOException {
-        boolean result=false;
-        byte[] tmp=new byte[4];
+
+    /**
+     * 请求阶段
+     *
+     * @param inputStream
+     * @param outputStream
+     * @return
+     * @throws IOException
+     */
+    private boolean request(InputStream inputStream, OutputStream outputStream) throws IOException {
+        boolean result = false;
+        byte[] tmp = new byte[4];
         System.out.println(tmp[0]);
-        if (inputStream.read(tmp)!=-1){
-            if(tmp[0]==0x05){
-                switch (tmp[1]){
+        if (inputStream.read(tmp) != -1) {
+            if (tmp[0] == 0x05) {
+                switch (tmp[1]) {
                     case 0x01:
-                        String host=getHost(tmp[3],inputStream);
-                        tmp=new byte[2];
+                        String host = getHost(tmp[3], inputStream);
+                        tmp = new byte[2];
                         inputStream.read(tmp);
                         int port = ByteBuffer.wrap(tmp).asShortBuffer().get() & 0xFFFF;
-                        targetSocket=new Socket(host,port);
-                        outputStream.write(new byte[]{0x05,0x00,0x00,0x01});
+                        targetSocket = new Socket(host, port);
+                        outputStream.write(new byte[]{0x05, 0x00, 0x00, 0x01});
                         outputStream.write(clientSocket.getLocalAddress().getAddress());
                         outputStream.write(tmp);
                         outputStream.flush();
-                        result=true;
+                        result = true;
                         break;
                     case 0x02:
                         break;
@@ -135,27 +160,28 @@ public class ClientSocketThread extends Thread {
         }
         return result;
     }
-    private String getHost(int atyp,InputStream inputStream) throws IOException {
-        String host=null;
-        byte[] tmp=null;
-        switch (atyp){
+
+    private String getHost(int atyp, InputStream inputStream) throws IOException {
+        String host = null;
+        byte[] tmp = null;
+        switch (atyp) {
             case 0x01:
                 //IPV4
-                tmp=new byte[4];
+                tmp = new byte[4];
                 inputStream.read(tmp);
-                host= InetAddress.getByAddress(tmp).getHostAddress();
+                host = InetAddress.getByAddress(tmp).getHostAddress();
                 break;
             case 0x03:
                 //域名
-                int length=inputStream.read();
-                tmp=new byte[length];
+                int length = inputStream.read();
+                tmp = new byte[length];
                 inputStream.read(tmp);
-                host=new String(tmp);
+                host = new String(tmp);
                 break;
             case 0x04:
-                tmp=new byte[16];
+                tmp = new byte[16];
                 inputStream.read(tmp);
-                host=InetAddress.getByAddress(tmp).getHostAddress();
+                host = InetAddress.getByAddress(tmp).getHostAddress();
         }
         return host;
     }
