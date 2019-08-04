@@ -1,9 +1,15 @@
 package socks5;
 
+import socks5.encryption.Encryption;
+import socks5.encryption.EncryptionInputStream;
+import socks5.encryption.EncryptionOutputStream;
+import socks5.encryption.methods.XorEncryption;
+
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.InetAddress;
+import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.ByteBuffer;
 import java.util.concurrent.Semaphore;
@@ -14,18 +20,19 @@ public class ClientSocketThread extends Thread {
     private Semaphore semaphore;
     private Socket targetSocket;
     private Byte protocal = 0;
-    private byte switchMethod=0x00;
-    public ClientSocketThread(Socket clientSocket, Semaphore semaphore) {
+    private byte switchMethod = 0x00;
+    private Encryption encryption;
+    public ClientSocketThread(Socket clientSocket, Semaphore semaphore,Encryption encryption) {
         this.clientSocket = clientSocket;
         this.semaphore = semaphore;
+        this.encryption=encryption;
     }
 
     @Override
     public void run() {
         try {
-
-            InputStream clientIn = clientSocket.getInputStream();
-            OutputStream clientOut = clientSocket.getOutputStream();
+            InputStream clientIn = new EncryptionInputStream(clientSocket.getInputStream(), encryption);
+            OutputStream clientOut = new EncryptionOutputStream(clientSocket.getOutputStream(), encryption);
             //处理握手
             if (!negotiation(clientIn, clientOut)) {
                 //握手失败
@@ -33,9 +40,9 @@ public class ClientSocketThread extends Thread {
                 return;
             }
             //认证
-            if (!Authentication.auth(switchMethod,clientIn,clientOut)){
+            if (!Authentication.auth(switchMethod, clientIn, clientOut)) {
                 //认证失败，关闭连接
-                closeClient(clientIn,clientOut);
+                closeClient(clientIn, clientOut);
                 return;
             }
 
@@ -54,6 +61,7 @@ public class ClientSocketThread extends Thread {
             thread2.join();
             clientSocket.close();
             targetSocket.close();
+            System.out.println("结束传输！");
         } catch (Exception e) {
             e.printStackTrace();
         } finally {
@@ -92,7 +100,7 @@ public class ClientSocketThread extends Thread {
                         inputStream.read(methods);
                         boolean has_methods = false;
                         for (int i = 0; i < nmethods; i++) {
-                            System.out.println("支持的认证协议:"+methods[i]);
+                            System.out.println("支持的认证协议:" + methods[i]);
                         }
                         for (int j = 0; j < Socks5Server.SUPPORT_METHODS.length; j++) {
                             for (int i = 0; i < nmethods; i++) {
@@ -105,7 +113,7 @@ public class ClientSocketThread extends Thread {
                         }
                         outputStream.write(protocal);
                         if (has_methods) {
-                            System.out.println("选择的协议版本："+switchMethod);
+                            System.out.println("选择的协议版本：" + switchMethod);
                             outputStream.write(switchMethod);
                             result = true;
                         } else {
@@ -135,26 +143,42 @@ public class ClientSocketThread extends Thread {
     private boolean request(InputStream inputStream, OutputStream outputStream) throws IOException {
         boolean result = false;
         byte[] tmp = new byte[4];
-        System.out.println(tmp[0]);
+
         if (inputStream.read(tmp) != -1) {
             if (tmp[0] == 0x05) {
-                switch (tmp[1]) {
+                ServerSocket tmpServerSocket=null;
+                byte cmd = tmp[1];
+                byte req = 0x00;
+                result = true;
+                String host = getHost(tmp[3], inputStream);
+                tmp = new byte[2];
+                inputStream.read(tmp);
+                int port = ByteBuffer.wrap(tmp).asShortBuffer().get() & 0xFFFF;
+
+                switch (cmd) {
                     case 0x01:
-                        String host = getHost(tmp[3], inputStream);
-                        tmp = new byte[2];
-                        inputStream.read(tmp);
-                        int port = ByteBuffer.wrap(tmp).asShortBuffer().get() & 0xFFFF;
-                        targetSocket = new Socket(host, port);
-                        outputStream.write(new byte[]{0x05, 0x00, 0x00, 0x01});
-                        outputStream.write(clientSocket.getLocalAddress().getAddress());
-                        outputStream.write(tmp);
-                        outputStream.flush();
-                        result = true;
+                        try {
+                            targetSocket = new Socket(host, port);
+                        } catch (Exception e) {
+                            req = 0x05;
+                            result = false;
+                        }
+
                         break;
                     case 0x02:
+                        System.out.println("CMD命令BIND！");
+                        tmpServerSocket=new ServerSocket(port);
                         break;
                     case 0x03:
+                        result=false;
                         break;
+                }
+                outputStream.write(new byte[]{0x05, req, 0x00, 0x01});
+                outputStream.write(clientSocket.getLocalAddress().getAddress());
+                outputStream.write(tmp);
+                outputStream.flush();
+                if (null!=tmpServerSocket){
+                    targetSocket=tmpServerSocket.accept();
                 }
             }
         }

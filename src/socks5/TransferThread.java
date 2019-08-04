@@ -23,7 +23,6 @@ public class TransferThread extends Thread {
             inputStream.close();
             outputStream.close();
         }catch (Exception e){
-            e.printStackTrace();
         }
     }
 }
